@@ -3,9 +3,8 @@ title: "homework 9"
 author: "Seongmoon Cho"
 date: "`r Sys.Date()`"
 output:
-  github_document:
-    toc: true
-    math_method: webtex
+  html_document: default
+  pdf_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -100,7 +99,7 @@ stan_dat <- with(data,
 )
 # 2. Run Stan
 m1 <- stan(
-    file = here("Project", "normal_2group.stan"),
+    file = here("normal_2group.stan"),
     data = stan_dat,
     seed = 20220419,  # for reproducibility
     iter = 4000
