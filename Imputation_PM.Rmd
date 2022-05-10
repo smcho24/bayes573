@@ -1,0 +1,198 @@
+---
+title: "Imputation of Missing Pollution Data"
+author: "Phillip Sangwoo Lee"
+output:
+  html_document: default
+---
+
+```{r load-pkg, message = FALSE}
+library(modelsummary)
+library(mice)
+library(brms)
+library(magrittr)
+library(posterior)
+library(stargazer)
+library(dplyr)
+library(tidyr)
+library(haven)
+library(bayesplot)
+library(tinytex)
+```
+
+Import the data set using the following code (and make changes as needed). 
+
+```{r dat}
+pm <- read_dta("/Users/philee/Dropbox/USC/2022 Winter/Bayesian/Final Paper/bayes_final(daily).dta")
+pm$Station_ID <- as.factor(pm$Station_ID)
+pm$month <- as.factor(pm$month)
+pm$year <- as.factor(pm$year)
+
+pm <- pm[c("myday", "Station_ID", "month", "year", "davsr", "davrh", "daily_avg_pm10", "dtmp8m", "ftot", "fmax")]
+```
+
+Summary Statistics of Observed vs Missing 
+
+```{r PM10_missing, indent = "    "}
+datasummary_balance(
+    ~ missing_mp,
+    data = cbind(pm[ , -c(1:4)],
+                 missing_mp = factor(is.na(pm$daily_avg_pm10),
+                                     labels = c("observed", "missing"))))
+```
+
+Summary Statistics of Observed vs Missing by Station
+
+```{r}
+pm %>% 
+  mutate(missings = ifelse(is.na(daily_avg_pm10), "missing", "observed")) %>% 
+  select(myday, Station_ID, missings, dtmp8m, davsr, davrh, ftot, fmax) %>% 
+  group_by(Station_ID, missings) %>% 
+  mutate(id = 1:n()) %>% 
+  ungroup() %>% 
+  gather(temp, val, dtmp8m, davsr, davrh, ftot, fmax) %>% 
+  unite(temp1, temp, Station_ID, missings, sep = "_") %>% 
+  spread(temp1, val) %>% 
+  select(-id) %>% 
+  as.data.frame() %>% 
+  stargazer(type = "text")
+```
+
+From the missing data pattern below, how many measurements have missing PM10 and PM2.5?
+
+```{r missing-pattern, indent = "    ", results = "hide", fig.asp = 1.618}
+mice::md.pattern(pm, rotate = TRUE)
+sum(is.na(pm$daily_avg_pm10)) + sum(is.na(pm$daily_avg_pm25)) - sum(is.na(pm$daily_avg_pm10)&is.na(pm$daily_avg_pm25))
+sum(is.na(pm$daily_avg_pm10)|is.na(pm$daily_avg_pm25))
+```
+
+Single Imputation Model
+
+```{r m1, indent = "    ", results = "hide", message = FALSE}
+m1 <- brm(daily_avg_pm10 | mi() ~ davsr + davrh + dtmp8m + ftot + fmax + month + year + (1|Station_ID), data = pm,
+          prior = c(
+              prior(normal(18,10), class = "Intercept"),
+              prior(normal(169,46), class = "b", coef = davsr),
+              prior(normal(65,6), class = "b", coef = davrh),
+              prior(normal(13,15), class = "b", coef = dtmp8m),
+              prior(normal(538,857), class = "b", coef = ftot),
+              prior(normal(104,107), class = "b", coef = fmax)),
+          chains = 4, cores = 8, iter = 4000, seed = 1)
+```
+
+Single Imputation Model Estimates
+
+```{r m1 model estimates}
+m1
+```
+
+5 Simulated/Imputed Datasets
+
+```{r imp, indent = "    "}
+imp <- mice(pm, maxit = 0)
+pred <- imp$predictorMatrix
+# Exclude id
+pred[ , c("myday", "Station_ID", "daily_avg_pm10", "daily_avg_pm25")] <- 0
+# imputation 
+imp <- mice(pm, m = 5, predictorMatrix = pred, 
+            maxit = 50, 
+            print = FALSE,
+            seed = 111)
+```
+
+Check for mixture of simulated datasets
+
+```{r plot-imp, indent = "    ", out.width = "100%", fig.width = 8.57}
+plot(imp)
+```
+
+Multiple Imputation Model Estimates with 50 Imputed Datasets
+
+```{r m2, indent = "    ", results = "hide", message = FALSE}
+m2 <- brm_multiple(
+    daily_avg_pm10 ~ davsr + davrh + dtmp8m + ftot + fmax + month + year + (1|Station_ID), data = imp,
+          prior = c(
+              prior(normal(18,10), class = "Intercept"),
+              prior(normal(169,46), class = "b", coef = davsr),
+              prior(normal(65,6), class = "b", coef = davrh),
+              prior(normal(13,15), class = "b", coef = dtmp8m),
+              prior(normal(538,857), class = "b", coef = ftot),
+              prior(normal(104,107), class = "b", coef = fmax)),
+    chains = 4, cores = 8, iter = 4000, seed = 1) 
+```
+
+```{r m2-plot, indent = "    "}
+mcmc_plot(m2, type = "dens", variable = "b_Intercept")
+```
+
+
+```{r}
+m2 
+```
+
+```{r}
+as_draws_df(m2) %>%
+    subset_draws(chain = 1:4) %>%
+    summarize_draws()
+```
+
+
+```{r plot m2}
+plot(m2)
+```
+
+
+50 Simulated/Imputed Datasets
+
+```{r imp, indent = "    "}
+imp2 <- mice(pm, maxit = 0)
+pred <- imp2$predictorMatrix
+# Exclude id
+pred[ , c("myday", "Station_ID", "daily_avg_pm10", "daily_avg_pm25")] <- 0
+# imputation 
+imp2 <- mice(pm, m = 50, predictorMatrix = pred, 
+            maxit = 50, 
+            print = FALSE,
+            seed = 111)
+```
+
+Check for mixture of simulated datasets
+
+```{r plot-imp, indent = "    ", out.width = "100%", fig.width = 8.57}
+plot(imp2)
+```
+
+
+Multiple Imputation Model Estimates with 50 Imputed Datasets
+
+```{r m2, indent = "    ", results = "hide", message = FALSE}
+m3 <- brm_multiple(
+    daily_avg_pm10 ~ davsr + davrh + dtmp8m + ftot + fmax + month + year + (1|Station_ID), data = imp2,
+          prior = c(
+              prior(normal(18,10), class = "Intercept"),
+              prior(normal(169,46), class = "b", coef = davsr),
+              prior(normal(65,6), class = "b", coef = davrh),
+              prior(normal(13,15), class = "b", coef = dtmp8m),
+              prior(normal(538,857), class = "b", coef = ftot),
+              prior(normal(104,107), class = "b", coef = fmax)),
+    chains = 4, cores = 8, iter = 4000, seed = 1) 
+```
+
+```{r m2-plot, indent = "    "}
+mcmc_plot(m3, type = "dens", variable = "b_Intercept")
+```
+
+
+```{r}
+m3 
+```
+
+```{r}
+as_draws_df(m3) %>%
+    subset_draws(chain = 1:4) %>%
+    summarize_draws()
+```
+
+
+```{r plot m3}
+plot(m3)
+```
